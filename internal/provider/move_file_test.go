@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 // Updating fields in provider or swapping provider should ideally be supported
@@ -18,11 +18,11 @@ func TestMovingFileByModifyingProvider(t *testing.T) {
 		PreCheck: func() {
 			testAccPreCheck(t)
 		},
-		ProviderFactories: providerFactories,
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
 				// Create file on 'remotehost'
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "move_file" {
 					provider = remotehost
 					path = "/tmp/move_file.txt"
@@ -32,7 +32,7 @@ func TestMovingFileByModifyingProvider(t *testing.T) {
 			},
 			{
 				// Move file to 'remotehost2'
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "move_file" {
 					provider = remotehost2
 					path = "/tmp/move_file.txt"
@@ -42,7 +42,7 @@ func TestMovingFileByModifyingProvider(t *testing.T) {
 			},
 			{
 				// Read file on 'remotehost2'
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "move_file" {
 					provider = remotehost2
 					path = "/tmp/move_file.txt"
@@ -67,11 +67,11 @@ func TestMovingFileByModifyingConn(t *testing.T) {
 		PreCheck: func() {
 			testAccPreCheck(t)
 		},
-		ProviderFactories: providerFactories,
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
 				// Create file on 'remotehost'
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "move_file_2" {
 					conn {
 						host = "remotehost"
@@ -85,7 +85,7 @@ func TestMovingFileByModifyingConn(t *testing.T) {
 			},
 			{
 				// Move file to 'remotehost2'
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "move_file_2" {
 					conn {
 						host = "remotehost2"
@@ -99,7 +99,7 @@ func TestMovingFileByModifyingConn(t *testing.T) {
 			},
 			{
 				// Read file on 'remotehost2'
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "move_file_2" {
 					conn {
 						host = "remotehost2"

@@ -1,173 +1,132 @@
 package provider
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
 
-var connectionSchemaResource = &schema.Resource{
-	Schema: map[string]*schema.Schema{
-		"host": {
-			Type:        schema.TypeString,
-			Required:    true,
-			ForceNew:    true,
-			Description: "The remote host.",
-		},
-		"port": {
-			Type:        schema.TypeInt,
-			Optional:    true,
-			Default:     22,
-			ForceNew:    true,
-			Description: "The ssh port on the remote host.",
-		},
-		"timeout": {
-			Type:        schema.TypeInt,
-			Optional:    true,
-			Description: "The maximum amount of time, in milliseconds, for the TCP connection to establish. Timeout of zero means no timeout.",
-		},
-		"user": {
-			Type:        schema.TypeString,
-			Required:    true,
-			Description: "The user on the remote host.",
-		},
-		"sudo": {
-			Type:        schema.TypeBool,
-			Optional:    true,
-			Default:     false,
-			Description: "Use sudo to gain access to file.",
-		},
-		"agent": {
-			Type:        schema.TypeBool,
-			Optional:    true,
-			Default:     false,
-			Description: "Use a local SSH agent to login to the remote host.",
-		},
-		"password": {
-			Type:        schema.TypeString,
-			Optional:    true,
-			Sensitive:   true,
-			Description: "The pasword for the user on the remote host.",
-		},
-		"private_key": {
-			Type:        schema.TypeString,
-			Optional:    true,
-			Sensitive:   true,
-			Description: "The private key used to login to the remote host.",
-		},
-		"private_key_path": {
-			Type:        schema.TypeString,
-			Optional:    true,
-			Description: "The local path to the private key used to login to the remote host.",
-		},
-		"private_key_env_var": {
-			Type:        schema.TypeString,
-			Optional:    true,
-			Description: "The name of the local environment variable containing the private key used to login to the remote host.",
-		},
-	},
+type ConnectionResourceModel struct {
+	Host             types.String `tfsdk:"host"`
+	Port             types.Int64  `tfsdk:"port"`
+	Timeout          types.Int64  `tfsdk:"timeout"`
+	User             types.String `tfsdk:"user"`
+	Sudo             types.Bool   `tfsdk:"sudo"`
+	Agent            types.Bool   `tfsdk:"agent"`
+	Password         types.String `tfsdk:"password"`
+	PrivateKey       types.String `tfsdk:"private_key"`
+	PrivateKeyPath   types.String `tfsdk:"private_key_path"`
+	PrivateKeyEnvVar types.String `tfsdk:"private_key_env_var"`
 }
 
-func ConnectionFromResourceData(ctx context.Context, d *schema.ResourceData) (string, *ssh.ClientConfig, error) {
-	if _, ok := d.GetOk("conn"); !ok {
-		return "", nil, fmt.Errorf("resouce does not have a connection configured")
-	}
+// Validate validates required and defaulted fields
+func (m *ConnectionResourceModel) Validate() diag.Diagnostics {
+	dia := diag.Diagnostics{}
 
-	host, err := Get[string](d, "conn.0.host")
-	if err != nil {
-		return "", nil, err
-	}
+	// if m.Host.IsNull() || m.Host.IsUnknown() {
+	// 	dia.AddAttributeError(path.Root("conn").AtName("host"), "Client Error", "Host is unknown")
+	// }
 
-	port, err := Get[int](d, "conn.0.port")
-	if err != nil {
-		return "", nil, err
-	}
+	// if m.Port.IsNull() || m.Port.IsUnknown() {
+	// 	dia.AddAttributeError(path.Root("conn").AtName("port"), "Client Error", "Port is unknown")
+	// }
 
-	user, err := Get[string](d, "conn.0.user")
-	if err != nil {
-		return "", nil, err
+	// if m.User.IsNull() || m.User.IsUnknown() {
+	// 	dia.AddAttributeError(path.Root("conn").AtName("user"), "Client Error", "User is unknown")
+	// }
+
+	// if m.Sudo.IsNull() || m.Sudo.IsUnknown() {
+	// 	dia.AddAttributeError(path.Root("conn").AtName("sudo"), "Client Error", "Sudo is unknown")
+	// }
+
+	// if m.Agent.IsNull() || m.Agent.IsUnknown() {
+	// 	dia.AddAttributeError(path.Root("conn").AtName("agent"), "Client Error", "Agent is unknown")
+	// }
+
+	return dia
+}
+
+func (d *ConnectionResourceModel) ConnectionHash() string {
+	elements := []string{
+		d.Host.ValueString(),
+		d.User.ValueString(),
+		strconv.Itoa(int(d.Port.ValueInt64())),
+		d.Password.ValueString(),
+		d.PrivateKey.ValueString(),
+		d.PrivateKeyPath.ValueString(),
+		strconv.FormatBool(d.Agent.ValueBool()),
 	}
+	return strings.Join(elements, "::")
+}
+
+func (conn *ConnectionResourceModel) Connection() (string, *ssh.ClientConfig, diag.Diagnostics) {
+	dia := diag.Diagnostics{}
+
+	host := conn.Host.ValueString()
+	port := conn.Port.ValueInt64()
+	user := conn.User.ValueString()
 
 	clientConfig := ssh.ClientConfig{
 		User:            user,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	if password, ok, err := GetOk[string](d, "conn.0.password"); ok {
-		if err != nil {
-			return "", nil, err
-		}
-
-		clientConfig.Auth = append(clientConfig.Auth, ssh.Password(password))
+	if !conn.Password.IsNull() && !conn.Password.IsUnknown() {
+		clientConfig.Auth = append(clientConfig.Auth, ssh.Password(conn.Password.ValueString()))
 	}
 
-	if privateKey, ok, err := GetOk[string](d, "conn.0.private_key"); ok {
+	if !conn.PrivateKey.IsNull() && !conn.PrivateKey.IsUnknown() {
+		signer, err := ssh.ParsePrivateKey([]byte(conn.PrivateKey.ValueString()))
 		if err != nil {
-			return "", nil, err
+			dia.AddError("Error", fmt.Sprintf("couldn't create a ssh client config from private key: %s", err.Error()))
+		} else {
+			clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeys(signer))
 		}
-
-		signer, err := ssh.ParsePrivateKey([]byte(privateKey))
-		if err != nil {
-			return "", nil, fmt.Errorf("couldn't create a ssh client config from private key: %s", err.Error())
-		}
-		clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeys(signer))
 	}
 
-	if privateKeyPath, ok, err := GetOk[string](d, "conn.0.private_key_path"); ok {
+	if !conn.PrivateKeyPath.IsNull() && !conn.PrivateKeyPath.IsUnknown() {
+		content, err := os.ReadFile(conn.PrivateKeyPath.ValueString())
 		if err != nil {
-			return "", nil, err
+			dia.AddError("Error", fmt.Sprintf("couldn't read private key: %s", err.Error()))
+		} else {
+			signer, err := ssh.ParsePrivateKey(content)
+			if err != nil {
+				dia.AddError("Error", fmt.Sprintf("couldn't create a ssh client config from private key file: %s", err.Error()))
+			} else {
+				clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeys(signer))
+			}
 		}
+	}
 
-		content, err := os.ReadFile(privateKeyPath)
-		if err != nil {
-			return "", nil, fmt.Errorf("couldn't read private key: %s", err.Error())
-		}
+	if !conn.PrivateKeyEnvVar.IsNull() && !conn.PrivateKeyEnvVar.IsUnknown() {
+		content := []byte(os.Getenv(conn.PrivateKeyEnvVar.ValueString()))
 		signer, err := ssh.ParsePrivateKey(content)
 		if err != nil {
-			return "", nil, fmt.Errorf("couldn't create a ssh client config from private key file: %s", err.Error())
+			dia.AddError("Error", fmt.Sprintf("couldn't create a ssh client config from private key env var: %s", err.Error()))
+		} else {
+			clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeys(signer))
 		}
-		clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeys(signer))
 	}
-
-	if privateKeyEnvVar, ok, err := GetOk[string](d, "conn.0.private_key_env_var"); ok {
-		if err != nil {
-			return "", nil, err
-		}
-
-		content := []byte(os.Getenv(privateKeyEnvVar))
-		signer, err := ssh.ParsePrivateKey(content)
-		if err != nil {
-			return "", nil, fmt.Errorf("couldn't create a ssh client config from private key env var: %s", err.Error())
-		}
-		clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeys(signer))
-	}
-
-	// Don't check ok as terraform struggles with zero values.
-	if enableAgent, _, err := GetOk[bool](d, "conn.0.agent"); enableAgent {
-		if err != nil {
-			return "", nil, err
-		}
-
+	if conn.Agent.ValueBool() {
 		connection, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
 		if err != nil {
-			return "", nil, fmt.Errorf("couldn't connect to SSH agent: %s", err.Error())
+			dia.AddError("Error", fmt.Sprintf("couldn't connect to SSH agent: %s", err.Error()))
+		} else {
+			clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeysCallback(agent.NewClient(connection).Signers))
 		}
-		clientConfig.Auth = append(clientConfig.Auth, ssh.PublicKeysCallback(agent.NewClient(connection).Signers))
 	}
 
-	if timeout, ok, err := GetOk[int](d, "conn.0.timeout"); ok {
-		if err != nil {
-			return "", nil, err
-		}
-
-		clientConfig.Timeout = time.Duration(timeout) * time.Millisecond
+	if conn.Timeout.IsNull() || conn.Timeout.IsUnknown() {
+		clientConfig.Timeout = time.Duration(conn.Timeout.ValueInt64()) * time.Millisecond
 	}
 
-	return fmt.Sprintf("%s:%d", host, port), &clientConfig, nil
+	return fmt.Sprintf("%s:%d", host, port), &clientConfig, dia
 }

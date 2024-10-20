@@ -5,16 +5,16 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 func TestAccResourceRemoteFile(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "resource_1" {
 					conn {
 						host = "remotehost"
@@ -39,11 +39,11 @@ func TestAccResourceRemoteFile(t *testing.T) {
 
 func TestAccResourceRemoteFileWithDefaultConnection(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "resource_2" {
 					provider = remotehost
 
@@ -68,11 +68,11 @@ func TestAccResourceRemoteFileWithAgent(t *testing.T) {
 	}
 
 	resource.UnitTest(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "resource_3" {
 					conn {
 						host = "remotehost"
@@ -94,11 +94,11 @@ func TestAccResourceRemoteFileWithAgent(t *testing.T) {
 
 func TestAccResourceRemoteFileOwnership(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "resource_4" {
 					conn {
 						host = "remotehost"
@@ -130,11 +130,11 @@ func TestAccResourceRemoteFileOwnership(t *testing.T) {
 
 func TestAccResourceRemoteFileOwnershipWithDefaultConnection(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "resource_5" {
 					provider = remotehost
 					path = "/tmp/resource_5.txt"
@@ -160,11 +160,11 @@ func TestAccResourceRemoteFileOwnershipWithDefaultConnection(t *testing.T) {
 
 func TestAccResourceRemoteFileOwnershipNames(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				resource "remote_file" "resource_6" {
 					conn {
 						host = "remotehost"

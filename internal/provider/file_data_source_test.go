@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 func TestAccDataSourceRemoteFile(t *testing.T) {
@@ -14,10 +14,10 @@ func TestAccDataSourceRemoteFile(t *testing.T) {
 			testAccPreCheck(t)
 			writeFileToHost("remotehost:22", "/tmp/data_1.txt", "data_1", "root", "bob")
 		},
-		ProviderFactories: providerFactories,
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				data "remote_file" "data_1" {
 					conn {
 						host = "remotehost"
@@ -54,10 +54,10 @@ func TestAccDataSourceRemoteFileOverridingDefaultConnection(t *testing.T) {
 			testAccPreCheck(t)
 			writeFileToHost("remotehost2:22", "/tmp/data_2.txt", "data_2", "root", "root")
 		},
-		ProviderFactories: providerFactories,
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				data "remote_file" "data_2" {
 					provider = remotehost
 					conn {
@@ -87,10 +87,10 @@ func TestAccDataSourceRemoteFilePrivateKey(t *testing.T) {
 			testAccPreCheck(t)
 			writeFileToHost("remotehost:22", "/tmp/data_3.txt", "data_3", "root", "root")
 		},
-		ProviderFactories: providerFactories,
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				data "remote_file" "data_3" {
 					conn {
 						host = "remotehost"
@@ -158,10 +158,10 @@ func TestAccDataSourceRemoteFilePrivateKeyPath(t *testing.T) {
 			testAccPreCheck(t)
 			writeFileToHost("remotehost:22", "/tmp/data_4.txt", "data_4", "root", "root")
 		},
-		ProviderFactories: providerFactories,
+		ProtoV6ProviderFactories: providerFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `
+				Config: providerConfig + `
 				data "remote_file" "data_4" {
 					conn {
 						host = "remotehost"

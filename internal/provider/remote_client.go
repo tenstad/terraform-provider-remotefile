@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bramvdbogaerde/go-scp"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -301,15 +302,16 @@ func (c *RemoteClient) DeleteFileShell(path string) error {
 	return run(session, cmd)
 }
 
-func NewRemoteClient(host string, clientConfig *ssh.ClientConfig) (*RemoteClient, error) {
+func NewRemoteClient(host string, clientConfig *ssh.ClientConfig) (*RemoteClient, diag.Diagnostics) {
 	client, err := ssh.Dial("tcp", host, clientConfig)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't establish a connection to the remote server '%s@%s': %s", clientConfig.User, host, err.Error())
+		return nil, diag.Diagnostics{diag.NewErrorDiagnostic(
+			"Connection Error",
+			fmt.Sprintf("couldn't establish a connection to the remote server '%s@%s: %s'", clientConfig.User, host, err.Error()),
+		)}
 	}
 
-	return &RemoteClient{
-		sshClient: client,
-	}, nil
+	return &RemoteClient{sshClient: client}, nil
 }
 
 func (c *RemoteClient) Close() error {

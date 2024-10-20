@@ -24,7 +24,7 @@ If you wish to work on the provider, you'll first need Go installed on your
 machine. You might also want Terraform and Docker, depending on the work.
 
 - [Go](https://golang.org/doc/install) >= 1.22
-- [Terraform](https://www.terraform.io/downloads.html) >= 0.13.x
+- [Terraform](https://www.terraform.io/downloads.html) >= 0.15.x
 - [Docker](https://www.docker.com/get-started) (for test purposes)
 
 ### Development Workflow

@@ -2,107 +2,228 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/function"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-func init() {
-	// Set descriptions to support markdown syntax, this will be used in document generation
-	// and the language server.
-	schema.DescriptionKind = schema.StringMarkdown
+// Ensure RemoteProvider satisfies various provider interfaces.
+var _ provider.Provider = &RemoteProvider{}
+var _ provider.ProviderWithFunctions = &RemoteProvider{}
 
-	// Customize the content of descriptions when output. For example you can add defaults on
-	// to the exported descriptions if present.
-	schema.SchemaDescriptionBuilder = func(s *schema.Schema) string {
-		desc := s.Description
-		if s.Default != nil {
-			desc += fmt.Sprintf(" Defaults to `%v`.", s.Default)
-		}
-		return strings.TrimSpace(desc)
+// RemoteProvider defines the provider implementation.
+type RemoteProvider struct {
+	// version is set to the provider version on release, "dev" when the
+	// provider is built and ran locally, and "test" when running acceptance
+	// testing.
+	version string
+}
+
+// RemoteProviderModel describes the provider data model.
+type RemoteProviderModel struct {
+	Connection  types.List  `tfsdk:"conn"`
+	MaxSessions types.Int64 `tfsdk:"max_sessions"`
+}
+
+func (p *RemoteProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "remote"
+	resp.Version = p.version
+}
+
+func (p *RemoteProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Blocks: map[string]schema.Block{
+			"conn": schema.ListNestedBlock{
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"host": schema.StringAttribute{
+							Required: true,
+							//FIXME: ForceNew:    true,
+							MarkdownDescription: "The remote host.",
+						},
+						"port": schema.Int64Attribute{
+							Optional: true,
+							//FIXME: Default:     22,
+							//FIXME: ForceNew:    true,
+							MarkdownDescription: "The ssh port on the remote host.",
+						},
+						"timeout": schema.Int64Attribute{
+							Optional:            true,
+							MarkdownDescription: "The maximum amount of time, in milliseconds, for the TCP connection to establish. Timeout of zero means no timeout.",
+						},
+						"user": schema.StringAttribute{
+							Required:            true,
+							MarkdownDescription: "The user on the remote host.",
+						},
+						"sudo": schema.BoolAttribute{
+							Optional: true,
+							//FIXME: Default:     false,
+							MarkdownDescription: "Use sudo to gain access to file.",
+						},
+						"agent": schema.BoolAttribute{
+							Optional: true,
+							//FIXME: Default:     false,
+							MarkdownDescription: "Use a local SSH agent to login to the remote host.",
+						},
+						"password": schema.StringAttribute{
+							Optional:            true,
+							Sensitive:           true,
+							MarkdownDescription: "The pasword for the user on the remote host.",
+						},
+						"private_key": schema.StringAttribute{
+							Optional:            true,
+							Sensitive:           true,
+							MarkdownDescription: "The private key used to login to the remote host.",
+						},
+						"private_key_path": schema.StringAttribute{
+							Optional:            true,
+							MarkdownDescription: "The local path to the private key used to login to the remote host.",
+						},
+						"private_key_env_var": schema.StringAttribute{
+							Optional:            true,
+							MarkdownDescription: "The name of the local environment variable containing the private key used to login to the remote host.",
+						},
+					},
+				},
+				Validators: []validator.List{
+					listvalidator.SizeAtMost(1),
+				},
+				MarkdownDescription: "Default connection to host where files are located. Can be overridden in resources and data sources.",
+			},
+		},
+		Attributes: map[string]schema.Attribute{
+			"max_sessions": schema.Int64Attribute{
+				MarkdownDescription: "Maximum number of open sessions in each host connection.",
+				Optional:            true,
+				//FIXME: Default:     3,
+			},
+		},
 	}
 }
 
-func New(version string) func() *schema.Provider {
-	return func() *schema.Provider {
-		p := &schema.Provider{
-			DataSourcesMap: map[string]*schema.Resource{
-				"remote_file": dataSourceRemoteFile(),
-			},
-			ResourcesMap: map[string]*schema.Resource{
-				"remote_file": resourceRemoteFile(),
-			},
-			Schema: map[string]*schema.Schema{
-				"conn": {
-					Type:        schema.TypeList,
-					MinItems:    0,
-					MaxItems:    1,
-					Optional:    true,
-					Description: "Default connection to host where files are located. Can be overridden in resources and data sources.",
-					Elem:        connectionSchemaResource,
-				},
-				"max_sessions": {
-					Type:        schema.TypeInt,
-					Optional:    true,
-					Default:     3,
-					Description: "Maximum number of open sessions in each host connection.",
-				},
-			},
-		}
+func (p *RemoteProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var data RemoteProviderModel
 
-		p.ConfigureContextFunc = configure(version, p)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
-		return p
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	client := apiClient{
+		resourceData:   &data,
+		maxSessions:    int(data.MaxSessions.ValueInt64()),
+		mux:            &sync.Mutex{},
+		remoteClients:  map[string]*RemoteClient{},
+		activeSessions: map[string]int{},
+	}
+
+	resp.DataSourceData = &client
+	resp.ResourceData = &client
+}
+
+func (p *RemoteProvider) Resources(ctx context.Context) []func() resource.Resource {
+	return []func() resource.Resource{
+		NewFileResource,
 	}
 }
+
+func (p *RemoteProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{
+		NewFileDataSource,
+	}
+}
+
+func (p *RemoteProvider) Functions(ctx context.Context) []func() function.Function {
+	return []func() function.Function{}
+}
+
+// FIXME:
+// func (p *RemoteProvider) ConfigValidators(ctx context.Context) []provider.ConfigValidator {
+// 	return []provider.ConfigValidator{}
+// }
+
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &RemoteProvider{
+			version: version,
+		}
+	}
+}
+
+// FIXME:
+// func init() {
+
+// 	// Customize the content of descriptions when output. For example you can add defaults on
+// 	// to the exported descriptions if present.
+// 	schema.SchemaDescriptionBuilder = func(s *schema.Schema) string {
+// 		desc := s.Description
+// 		if s.Default != nil {
+// 			desc += fmt.Sprintf(" Defaults to `%v`.", s.Default)
+// 		}
+// 		return strings.TrimSpace(desc)
+// 	}
+// }
 
 type apiClient struct {
-	resourceData   *schema.ResourceData
+	resourceData   *RemoteProviderModel
 	mux            *sync.Mutex
 	remoteClients  map[string]*RemoteClient
 	activeSessions map[string]int
 	maxSessions    int
 }
 
-func configure(version string, p *schema.Provider) func(context.Context, *schema.ResourceData) (interface{}, diag.Diagnostics) {
-	return func(c context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
-		client := apiClient{
-			resourceData:   d,
-			maxSessions:    d.Get("max_sessions").(int),
-			mux:            &sync.Mutex{},
-			remoteClients:  map[string]*RemoteClient{},
-			activeSessions: map[string]int{},
-		}
-
-		return &client, diag.Diagnostics{}
+func ConnAs(ctx context.Context, conn types.List) (*ConnectionResourceModel, diag.Diagnostics) {
+	connections := []ConnectionResourceModel{}
+	if diag := conn.ElementsAs(ctx, &connections, false); diag.HasError() {
+		return nil, diag
 	}
+
+	if len(connections) > 0 {
+		return &connections[0], nil
+	}
+
+	return nil, nil
 }
 
-func (c *apiClient) getConnWithDefault(d *schema.ResourceData) (*schema.ResourceData, error) {
-	if _, ok := d.GetOk("conn"); ok {
-		return d, nil
+func (c *apiClient) getConnWithDefault(ctx context.Context, conn types.List) (*ConnectionResourceModel, diag.Diagnostics) {
+	connection, dia := ConnAs(ctx, conn)
+	if dia.HasError() {
+		return nil, dia
+	}
+	if connection != nil {
+		return connection, dia
 	}
 
 	c.mux.Lock()
 	defer c.mux.Unlock()
 
-	if _, ok := c.resourceData.GetOk("conn"); ok {
-		return c.resourceData, nil
+	connection, dia = ConnAs(ctx, c.resourceData.Connection)
+	if dia.HasError() {
+		return nil, dia
+	}
+	if connection != nil {
+		return connection, dia
 	}
 
-	return nil, errors.New("neither the provider nor the resource/data source have a configured connection")
+	dia.AddError(
+		"Configuration error",
+		"neither the provider nor the resource/data source have a configured connection",
+	)
+	return nil, dia
 }
 
-func (c *apiClient) getRemoteClient(ctx context.Context, d *schema.ResourceData) (*RemoteClient, error) {
-	connectionID, err := resourceConnectionHash(d)
-	if err != nil {
-		return nil, err
-	}
+func (c *apiClient) getRemoteClient(ctx context.Context, conn *ConnectionResourceModel) (*RemoteClient, diag.Diagnostics) {
+	connectionID := conn.ConnectionHash()
 
 	defer c.mux.Unlock()
 	for {
@@ -118,9 +239,9 @@ func (c *apiClient) getRemoteClient(ctx context.Context, d *schema.ResourceData)
 			return client, nil
 		}
 
-		client, err := remoteClientFromResourceData(ctx, d)
-		if err != nil {
-			return nil, err
+		client, dia := remoteClientFromResourceData(ctx, conn)
+		if dia.HasError() {
+			return nil, dia
 		}
 
 		c.remoteClients[connectionID] = client
@@ -129,19 +250,16 @@ func (c *apiClient) getRemoteClient(ctx context.Context, d *schema.ResourceData)
 	}
 }
 
-func remoteClientFromResourceData(ctx context.Context, d *schema.ResourceData) (*RemoteClient, error) {
-	host, clientConfig, err := ConnectionFromResourceData(ctx, d)
-	if err != nil {
-		return nil, err
+func remoteClientFromResourceData(ctx context.Context, conn *ConnectionResourceModel) (*RemoteClient, diag.Diagnostics) {
+	host, clientConfig, dia := conn.Connection()
+	if dia.HasError() {
+		return nil, dia
 	}
 	return NewRemoteClient(host, clientConfig)
 }
 
-func (c *apiClient) closeRemoteClient(d *schema.ResourceData) error {
-	connectionID, err := resourceConnectionHash(d)
-	if err != nil {
-		return err
-	}
+func (c *apiClient) closeRemoteClient(conn *ConnectionResourceModel) diag.Diagnostics {
+	connectionID := conn.ConnectionHash()
 
 	c.mux.Lock()
 	defer c.mux.Unlock()
@@ -150,85 +268,18 @@ func (c *apiClient) closeRemoteClient(d *schema.ResourceData) error {
 	if c.activeSessions[connectionID] == 0 {
 		client := c.remoteClients[connectionID]
 		delete(c.remoteClients, connectionID)
-		return client.Close()
+		if err := client.Close(); err != nil {
+			return diag.Diagnostics{diag.NewErrorDiagnostic("Remote Client Error", err.Error())}
+		}
 	}
 
 	return nil
 }
 
-func setResourceID(d *schema.ResourceData, conn *schema.ResourceData) error {
-	host, err := Get[string](conn, "conn.0.host")
-	if err != nil {
-		return err
-	}
-
-	port, err := Get[int](conn, "conn.0.port")
-	if err != nil {
-		return err
-	}
-
-	path, err := Get[string](d, "path")
-	if err != nil {
-		return err
-	}
-
-	d.SetId(fmt.Sprintf("%s:%d:%s",
-		host,
-		port,
-		path,
-	))
-
-	return nil
-}
-
-func resourceConnectionHash(d *schema.ResourceData) (string, error) {
-	host, err := Get[string](d, "conn.0.host")
-	if err != nil {
-		return "", err
-	}
-
-	user, err := Get[string](d, "conn.0.user")
-	if err != nil {
-		return "", err
-	}
-
-	port, err := Get[int](d, "conn.0.port")
-	if err != nil {
-		return "", err
-	}
-
-	password, _, err := GetOk[string](d, "conn.0.password")
-	if err != nil {
-		return "", err
-	}
-
-	privateKey, _, err := GetOk[string](d, "conn.0.private_key")
-	if err != nil {
-		return "", err
-	}
-
-	privateKeyPath, _, err := GetOk[string](d, "conn.0.private_key_path")
-	if err != nil {
-		return "", err
-	}
-
-	// Should ideally use Get as it has a default and should always exist.
-	// However GetOk as Terraform returns false for exists when value equals
-	// zero value (which the default for agent does). Could maybe use
-	// GetOkExists, but discouraged.
-	agent, _, err := GetOk[bool](d, "conn.0.agent")
-	if err != nil {
-		return "", err
-	}
-
-	elements := []string{
-		host,
-		user,
-		strconv.Itoa(port),
-		password,
-		privateKey,
-		privateKeyPath,
-		strconv.FormatBool(agent),
-	}
-	return strings.Join(elements, "::"), nil
+func getResourceID(d *FileResourceModel, conn *ConnectionResourceModel) string {
+	return fmt.Sprintf("%s:%d:%s",
+		conn.Host.ValueString(),
+		conn.Port.ValueInt64(),
+		d.Path.ValueString(),
+	)
 }
